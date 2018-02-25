@@ -2,27 +2,108 @@ import numpy as np
 
 
 class Triangulate():
+    """When coordinate systems are spun about an axis, they are first spun about the z-axis
+    by angle alpha and then"""
     def __init__(self):
         self.comp_power = 100
+        self.chain=[]
+        self.dist=[]
+        self.dth=0
+        self.dph=0
+        self.obserrs = [np.pi/180/60,np.pi/180/60]
+
     
     def xp(self,a,b):
         """Returns x-prime, the vector representing the primed x-axis in the celestial frame. 
-        Points toward the sky, normal to surface of earth"""
-        return np.array([np.cos(a)*np.cos(b),np.sin(a)*np.cos(b),np.sin(b)])
+        Points toward the sky, normal to surface of earth.
+        
+        Input:
+            ------
+            a: float 
+                Alpha, the angle that the primed coordinate system is spun about its z-axis.
+               
+            b: float
+                Beta, angle that the primed coordinate system is pitched about its y-axis.
+                
+        Output:
+            ------
+            x_prime: ndarray [arg, dtype=float, shape=(3)
+                3-vector that represents the x-axis of the prime frame in celestial xyz coordinates.
+        """
+        
+        x_prime = np.array([np.cos(a)*np.cos(b),np.sin(a)*np.cos(b),np.sin(b)])
+        return x_prime
 
     def yp(self,a,b):
-        """Returns y-prime in celestial coordinates"""
-        return np.array([-np.sin(a),np.cos(a),0])
+        """Returns y-prime, the vector representing the primed x-axis in the celestial frame. 
+        Points toward the east, tangent to surface of earth.
+        
+        Input:
+            ------
+            a: float 
+                Alpha, the angle that the primed coordinate system is spun about its z-axis.
+               
+            b: float
+                Beta, angle that the primed coordinate system is pitched about its y-axis.
+                
+        Output:
+            ------
+            y_prime: ndarray [arg, dtype=float, shape=(3)
+                3-vector that represents the y-axis of the prime frame in celestial xyz coordinates.
+        """
+    
+        y_prime = np.array([-np.sin(a),np.cos(a),0])
+        return y_prime
     
     def zp(self,a,b):
         """Returns z-prime, the vector representation of the primed z-axis in the celestial frame.
-        Points north, tangent to surface of earth"""
+        Points north, tangent to surface of earth
+        
+        Input:
+            ------
+            a: float 
+                Alpha, the angle that the primed coordinate system is spun about its z-axis.
+               
+            b: float
+                Beta, angle that the primed coordinate system is pitched about its y-axis.
+                
+        Output:
+            ------
+            z_prime: ndarray [arg, dtype=float, shape=(3)
+                3-vector that represents the z-axis of the prime frame in celestial xyz coordinates.
+        """
 
-        return np.array([-np.cos(a)*np.sin(b),-np.sin(a)*np.sin(b),np.cos(b)])
+        z_prime = np.array([-np.cos(a)*np.sin(b),-np.sin(a)*np.sin(b),np.cos(b)])
+        return z_prime
 
 
-    def vec_prime(self,a,b,v):
-        """Transforms a celestial-coordinate vector into a primed frame representation."""
+    def vec_prime(self, a, b, v, form='xyz'):
+        """Transforms a celestial-coordinate vector into a primed frame representation.
+        
+        Inputs:
+            ------
+            a: float 
+                Alpha, the angle that the primed coordinate system is spun about its z-axis.
+               
+            b: float
+                Beta, angle that the primed coordinate system is pitched about its y-axis.
+                
+            v: ndarray or list [arg, dtype = float, shape=(2) or shape=(3)]
+                A celestial vector, in either a xyz or theta-phi representation.
+                
+        Optional:
+            ------
+            rep: string, arg = 'xyz' or 'th-ph'
+                Specify whether the output data should be in xyz coordinates or theta-phi coordinates. 
+                
+        
+        Output:
+            v_prime: ndarray [arg, dtype=float, shape=(3) or shape=(2)]
+                The vector represented in the primed coordinate system.
+        
+        """
+        
+        v = np.array(v)
         
         if len(v) == 2:
             v = self.xyz(v[0],v[1])
@@ -31,17 +112,95 @@ class Triangulate():
         x = np.dot(self.xp(a,b),v)
         z = np.dot(self.zp(a,b),v)
         y = np.dot(self.yp(a,b),v)
+        
+        v_xyz = np.round(np.array([x,y,z]),12)
 
-        return np.round(np.array([x,y,z]),12)
+        
+        if form == 'xyz':
+            v_out = v_xyz
+            
+        elif form == 'th-ph':
+            th = np.arctan2(v_xyz[1],v_xyz[2])
+            ph = np.arcsin(v_xyz[0])
+            v_out = np.array([th,ph])
+            
+        else:
+            raise ValueError("Requested representation not understood. Use either 'xyz' or 'th-ph")
+            
+        return v_out
 
 
     def xyz(self,th,ph):
         """Transforms spherical coordinates into xyz coordinates in the celestial frame."""
         return np.array([np.cos(th)*np.cos(ph), np.sin(th)*np.cos(ph), np.sin(ph)])
     
+    
+    def gen_mock(self,errs=[0,0]):
+        
+        """Generates a mock triangulation data set, to test the program.
+                
+        Optional:
+            ------
+            errs: list or ndarray [args, dtype=float shape=(2)] 
+                list the error in the the generated data of the observed angle differences
+                
+                
+        
+        Output:
+            v_prime: ndarray [arg, dtype=float, shape=(3) or shape=(2)]
+                The vector represented in the primed coordinate system.
+        """
+        
+        # Generate random truth values
+        a = np.random.rand()*2*np.pi
+        b = (np.random.rand()-0.5)*np.pi
+        
+        # Generate three random triangulation vectors
+        v1 = [np.random.uniform(0,2*np.pi),np.random.uniform(-np.pi/2,np.pi/2)]
+        v2 = [np.random.uniform(0,2*np.pi),np.random.uniform(-np.pi/2,np.pi/2)]
+        v3 = [np.random.uniform(0,2*np.pi),np.random.uniform(-np.pi/2,np.pi/2)]
+        
+        # Calculate the true difference in alt-azimuth, and add a little random error
+        v2_v1 = self.vec_prime(a,b,v2,form='th-ph') - self.vec_prime(a,b,v1,form='th-ph') + np.random.uniform(-errs[0],errs[0])
+        v3_v2 = self.vec_prime(a,b,v3,form='th-ph') - self.vec_prime(a,b,v2,form='th-ph') + np.random.uniform(-errs[1],errs[1])
+                
+        
+        return [a,b],v1,v2,v3,v2_v1,v3_v2
 
-    def find_valid(self, cel_ang_1, cel_ang_2, obs, lims=[[0,2*np.pi],[-np.pi/2,np.pi/2]]):
-        """Finds values of alpha and beta for which the observation fits prediction"""
+    
+    
+
+    def find_valid(self, obj1coor, obj2coor, obs, lims=[[0,2*np.pi],[-np.pi/2,np.pi/2]]):
+        """Calculates the probability distribution of lattitude and longitude points within the given limits.
+        
+        
+        Inputs:
+            ------
+            obj1coor: list or ndarray [args, dtype=float, shape=(2)]
+                Celestial angle coordinates for the first object
+                
+            obj2coor: list or ndarray [args, dtype=float, shape=(2)]
+                Celestial angle coordinates for the second object
+                
+            obs: list or ndarray [args, dtype=float, shape=(2)]
+                the observed difference in [azimuth, altitude] between object 1 and 2
+                
+        Optional:
+            ------
+            lims: list or ndarray [args, dtype=float, shape=(2,2)]
+                The limits in which to look for valid longitude and lattitudes. Default is the entire space.
+            
+        
+        Output:
+            ------
+            grid: list [args,dtype=float,shape=(2,100,100)]
+                The coordinates of each longitude and lattitude tested
+            
+            dist_norm: ndarray [args, dtype=float, shape=(100,100)]
+                The normalized probability distribution over all points in the grid.
+                
+        """
+            
         n=self.comp_power
     
         obsth = obs[0]
@@ -52,16 +211,11 @@ class Triangulate():
         B = np.linspace(lims[1][0],lims[1][1],n)
         grid = np.meshgrid(A,B)
         
-        
-        grid[0] += 1*(np.random.rand(n,n)-0.5) * (A[1]-A[0])
-        grid[1] += 1*(np.random.rand(n,n)-0.5) * (B[1]-B[0])
-        
         flat = np.array([grid[0].flatten(),grid[1].flatten()]).T
             
-
         # calculate observation vectors
-        obj1_xyz = self.xyz(cel_ang_1[0],cel_ang_1[1]) # xyz(obj1[0],obj1[1])
-        obj2_xyz = self.xyz(cel_ang_2[0],cel_ang_2[1]) # (obj2[0],obj2[1])
+        obj1_xyz = self.xyz(obj1coor[0],obj1coor[1]) # xyz(obj1[0],obj1[1])
+        obj2_xyz = self.xyz(obj2coor[0],obj2coor[1]) # (obj2[0],obj2[1])
 
 
         # For each potential A and B vector, calculate the theoretical change in theta and phi 
@@ -69,16 +223,8 @@ class Triangulate():
         php = []
         for x in flat:
             # Calculate the vectors in a frame [alpha, beta] on the surface of the earth
-            vp1 = self.vec_prime(x[0],x[1],obj1_xyz)
-            vp2 = self.vec_prime(x[0],x[1],obj2_xyz)
-            
-            # Calculate theoretical altitude (phi) and azimuth (theta) values of the observation of v1
-            thp1 = np.arctan2(vp1[1],vp1[2])
-            php1 = np.arcsin(vp1[0])
-    
-            # Calculate theoretical altitude (phi) and azimuth (theta) values of the observation of v2
-            thp2 = np.arctan2(vp2[1],vp2[2])
-            php2 = np.arcsin(vp2[0])
+            [thp1,php1] = self.vec_prime(x[0],x[1],obj1_xyz,form='th-ph')
+            [thp2,php2] = self.vec_prime(x[0],x[1],obj2_xyz,form='th-ph')
 
             # Calculate theoretical difference between the two angles
             thp += [thp2-thp1]
@@ -99,93 +245,69 @@ class Triangulate():
         sel_fin = np.array([])
         
         # Start real small with the binsize, extremely restrictive
-        binsize = 10**-12
+        stdth = np.std(thp.flatten())
+        stdph = np.std(php.flatten())*2
+        
+        #width = (max(thp.flatten())-min(thp.flatten()))/2
+        
+        mod=0.01
+        dist = np.ones((n,n))*10**-12
         
         
-        # Stop once we have over 100 hits
-        while np.sum(np.sum(sel_fin)) < self.comp_power:
-            # Check to see if theorized observation for each AB coord are close to observed one
-            #print selectth.size()
+        while mod*stdth < 3*self.obserrs[0] and mod*stdph < 3*self.obserrs[1]:
             
-            selectth = (np.abs(thp - obs12_th) < binsize*(lims[0][1]-lims[0][0])/n)
-            selectph =  (np.abs(php - obs12_ph) < binsize*(lims[1][1]-lims[1][0])/n)
+            mod*=1.01
             
-            # Select only those for which theta and phi are close
-            sel_fin = selectth*selectph   
-            
-            # Increase binsize and start over (if the total is less than 100 points)
-            binsize *= 1.05
+        thdist = np.exp(- ((thp-obs12_th)/(mod*stdth))**2 )
+        phdist = np.exp(- ((php-obs12_ph)/(mod*stdph))**2 )
+                
+        #thdist = np.exp(- ((thp-obs12_th)/(self.obserrs[0]))**2 )
+        #phdist = np.exp(- ((php-obs12_ph)/(self.obserrs[1]))**2 )        
+                
+        dist = (thdist/np.sum(thdist))*(phdist/np.sum(phdist))
+        dist_norm = dist/np.sum(dist)
         
-        # Return AB coordinates that are close to observation
+        self.chain+=[dist]
         
-        
-        return np.array([grid[0][sel_fin],grid[1][sel_fin]])
+        return grid,dist_norm
     
-    def match(self, c1,c2,c3):
-        """The purpose of this code is to take 3 curves, calculated with find_valid, and find areas in which their
-        values are close. This narrows down the possible AB values"""
+    def match(self,grid, c1,c2,c3):
+        """Combines three probability distributions to isolate points for which the lattitude and longitude values match observation"""
         
         # We want to compare two functions whose data points are not necessarily the same. Thus, we have to bin both into
         # a new, global data set.
         
-        axis_length = self.comp_power
+        comb = c1*c2*c3
+        comb /= np.sum(comb)
+                
+        self.dist+=[[grid,comb]]
         
-        # First, create bins
-        n=axis_length
-        alims = np.array([[min(c[0]),max(c[0])] for c in [c1,c2,c3]])
-        blims = np.array([[min(c[1]),max(c[1])] for c in [c1,c2,c3]])
+        thn = np.sum(comb,axis=0)
+        phn = np.sum(comb,axis=1)
         
-        da = max([(max(c[0])-min(c[0]))/n for c in [c1,c2,c3]])
-        db = max([(max(c[1])-min(c[1]))/n for c in [c1,c2,c3]])
+        th_ax = grid[0][0]
+        ph_ax = grid[1][:,0]
         
-        #print alims,blims
+        th_avg = np.sum(thn*th_ax)
+        ph_avg = np.sum(phn*ph_ax)
+        
+        #print sum(thn),sum(phn)
+        Np = np.sum(thn > 0.001)
+        n = len(thn)
+        
+        th_std = np.sqrt(np.sum( (th_ax - th_avg)**2 * thn))# * Np/(Np-1) )/ np.sqrt(n)
+        ph_std = np.sqrt(np.sum( (ph_ax - ph_avg)**2 * phn))# * Np/(Np-1) )/ np.sqrt(n)
+        
+        
+        return np.array([[th_avg,ph_avg],[th_std,ph_std]])
 
-        alim = [max(alims.T[0]),min(alims.T[1])]
-        blim = [max(blims.T[0]),min(blims.T[1])]
-        
-        aax = np.linspace(alim[0],alim[1],n)
-        bax = np.linspace(blim[0],blim[1],n)
-        
-        # random added to destroy uniform awkwardness
-        grid = np.meshgrid(aax,bax)
-        grid[0] += (np.random.rand(n,n) - 0.5) *  (aax[1]-aax[0])
-        grid[1] += (np.random.rand(n,n) - 0.5) * (bax[1]-bax[0])
-        
-        coors = np.array([grid[0].flatten(),grid[1].flatten()]).T
-        
-        # specify width for which points are accepted into the bin( I used twice the separation distance). The 
-        # functions we are trying to match are discrete and have errors, so r must be fairly large.
-        rth = 2*da
-        rph = 2*db
-
-        # Go through each data set (each observation run though find_valid), and select the points where 
-        # all three values fall into bin (tiered to lower computational power)
-        h = []
-        
-        for c in coors:
-            select1 = (c1[0] > c[0]) * (c1[0] < (c[0] + rth)) * (c1[1] > c[1]) * (c1[1] < (c[1] + rph))
-
-            if (sum(select1) > 0):
-                select2 = (c2[0] > c[0]) * (c2[0] < (c[0] + rth)) * (c2[1] > c[1]) * (c2[1] < (c[1] + rph))
-
-                if sum(select2) > 0:
-                    select3 = (c3[0] > c[0]) * (c3[0] < (c[0] + rth)) * (c3[1] > c[1]) * (c3[1] < (c[1] + rph))
-
-                    if sum(select3) > 0:
-                        h += [c]
-                        
-        print "Number of points: " + str(len(h))
-                                                
-        # h is now an array containing all of the bin points for which there is a point from each data set within
-        out = np.array(h).T
-        out[0] += rth/2
-        out[1] += rph/2
-        return out
     
-    
-    def triangulate(self, v1, v2, v3, obs_v1_v2, obs_v2_v3, accuracy = 0.01):
+    def triangulate(self, v1, v2, v3, obs_v1_v2, obs_v2_v3, iterations = 5, obserrs=[None,None]):
         """given v1,v2,v3, three celestial coordinates for objects, and observed changes in altitude and azimuth of those
         objects, returns exact coordinates of normal vector. i.e. latitude and longitude"""
+        
+        if sum(np.array(obserrs)==None) == 0:
+            self.obserrs = obserrs
         
         
         # Calculate difference between v1 and v3
@@ -193,32 +315,36 @@ class Triangulate():
         
         lims = [[0,2*np.pi],[-np.pi/2,np.pi/2]]
         
-        accth=2
-        accph=1
         
-        while (accth > accuracy) or (accph > accuracy):
-            print "Running analysis..."
+        for i in range(iterations):
+            print "Running for lims: " + str(np.round(lims,5).tolist())
             
-            print lims
+            # find the probability distributions for each observation
+            grid, c1 = self.find_valid(v1, v2, obs_v1_v2, lims=lims)
+            _, c2 = self.find_valid(v1, v3, obs_v1_v3, lims=lims)
+            _, c3 = self.find_valid(v2, v3, obs_v2_v3, lims=lims)
             
-            c1 = T.find_valid(v1, v2, obs_v1_v2, lims=lims)
-            c2 = T.find_valid(v1, v3, obs_v1_v3, lims=lims)
-            c3 = T.find_valid(v2, v3, obs_v2_v3, lims=lims)
             
-            out = T.match(c1,c2,c3)
-            
-            accth = np.std(out[0])/np.sqrt(len(out[0]))
-            accph = np.std(out[1])/np.sqrt(len(out[1]))
-            
-            a = [np.average(out[0]),np.average(out[1])]
-            
-            lims = [[min(out[0]),max(out[0])], [min(out[1]), max(out[1])]]
-            
-            print "Achieved errors: " + str(accth) + "   and   " + str(accph)
-            
-
-            
+            if np.sum(np.isnan(c1*c2*c3) ==0):
+                
+                # Matches all three
+                [av,acc] = self.match(grid,c1,c2,c3)
+                
+                
+                # Finds the accuracy of the analysis, chooses new limits based on these
+                r = 5
+                dth = grid[0][0][1]-grid[0][0][0]
+                dph = grid[1][1][0]-grid[1][0][0]
+                
+                acc += np.array([dth,dph])/(r)
+                
+                lims = np.array([av - r*acc, av + r*acc]).T
+                
+                
+            else:
+                print "minimum value reached"
+                break
+                        
             
         print "Done."
-        err = [accth, accph]
-        return a, err
+        return av,acc
