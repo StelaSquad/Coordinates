@@ -208,8 +208,49 @@ class STELA():
     
 
 class Triangulate():
-    """When coordinate systems are spun about an axis, they are first spun about the z-axis
-    by angle alpha and then"""
+    """
+    This class is used to triangulate the location of the telescope based on three celestial objects. 
+    
+    It operates based on a latitude and longitude equatorial coordinate system, with celestial coordinates
+    given in that frame. The telescope can be placed a floor that is not perfectly normal to the surface 
+    of the earth. The use a (technically) false latitude and longitude, one for which the normal vector is the
+    same as the normal vector of the base of the telescope, can account for this error. This is the method
+    used, but note that the outputted earth coordinates will likely differ slightly than the true location of
+    the telescope.
+    
+    Objects:
+        Triangulate.obserrs: 
+                Expected errors in measured altitude and azimuth (default=1')
+        Triangulate.comp_power: T
+                he calculative potential of the computer being used (default=100)
+    
+    Functions:
+        Triangulate.triangulate:
+                Computes the normal vector of the telescope based on three objects and their observed angular
+                differences.
+        
+    Helper Functions:
+        Triangulate.xp, Triangulate.yp, Triangulate.zp: 
+                The coordinate vectors of a frame on the surface of the earth, at location [a,b].
+        Triangulate.vec_prime: 
+                Transforms a vector in equatorial frame into an earth alt-az frame at location [a,b].
+        Triangulate.find_valid: 
+                Given two objects and their angular difference, calculates probability the distribution across
+                latitude and longitude space.
+        Triangulate.match:
+                Given one coordinate grid and three 2d probability distributions, calculates the total 
+                probability distribution combining the three points.
+        
+    Outputs:
+        Triangulate.lon: 
+                Calculated longitude
+        Triangulate.lat: 
+                Calculated latitude
+        Triangulate.errs: 
+                The errors of the latitude and longitude [errlon,errlat]
+    
+    
+    """
     def __init__(self):
         self.comp_power = 100
         self.chain=[]
@@ -287,7 +328,7 @@ class Triangulate():
 
     def vec_prime(self, a, b, v, form='xyz'):
         """
-        Transforms a celestial-coordinate vector into a primed frame representation.
+        Transforms a vector in equatorial celestial frame into an earth alt-az frame at location [a,b].
         
         Inputs:
             ------
@@ -592,5 +633,9 @@ class Triangulate():
                 break
                         
             
+        self.lon = av[0]
+        self.lat = av[1]
+        self.errs = acc
+        
         print "Done."
         return av,acc
