@@ -1,5 +1,211 @@
 import numpy as np
+import astroquery.simbad as aq
+import astropy.coordinates as cp
+import astropy.time as time
+import astropy.units as u
+from astropy.table import Table
+import os
 
+class STELA():
+    """
+    Class that governs the alignment of telescope, star positions, catalogs, and star identification
+    
+    Quantities and objects:
+        STELA.naked: catolog of nearest stars, brightes in sky
+    
+    Functions:
+        STELA.setup_cats:
+            Setup catolog files.
+        STELA.get_ref_stars:
+            Given an estimated latitude and longitude, returns the three brightest stars in the sky to align.
+        STELA.gen_mock_obs:
+            For testing triangulation
+        STELA.triangulate:
+            After calling get_ref_stars, and measuring the differences in alt-az coordinates of the three
+            points, STELA.triangulate can locate the new latitude and longitude that accounts for the error
+            in telescope positioning.
+        
+    """
+    
+    def __init__(self):
+        self.catolog = aq.Simbad()
+        self.catolog.remove_votable_fields('coordinates')
+        self.catolog.add_votable_fields('ra','dec','flux(V)')
+        
+        self.reset_cats = False
+        
+        self.triangulation_class = Triangulate()
+        
+        self.setup_cats()
+    
+    def setup_cats(self):
+        """ 
+        Sets up the necessary catalogs, prints them to a file. (No parameters)
+        
+        """
+        
+        if self.reset_cats == True:
+            os.system('rm -r catalog')
+            
+        if os.path.exists('./catalog/naked.dat') == False:
+            if os.path.exists('catalog') == False:
+                os.mkdir('catalog')
+
+            self.naked =  self.catolog.query_catalog('GJ')
+            
+            select = np.ones(len(self.naked),dtype='bool')
+            select[np.where(np.isnan(np.array(self.naked['FLUX_V'])))[0]] = False
+                
+            self.naked = self.naked[select]
+            self.naked = Table(np.unique(self.naked))
+            self.naked.sort("FLUX_V")
+            
+            self.naked.write('./catalog/naked.dat',format='ascii')
+        else:
+            
+            self.naked = Table.read('./catalog/naked.dat',format='ascii')
+            
+
+    
+    def get_ref_stars(self,lon_est,lat_est,unit=[u.deg,u.deg]):
+        """
+        Given an estimation of longitude and latitude, identifies 3 target stars to use as 
+        triangulation coordinates
+        
+        Input:
+            ------
+            lon_est: float
+                The current longitude at which the telescope is set up
+            
+            lat_est: float
+                The current latitude at which the telescope is set up
+            
+        Output:
+            ------
+            altaz_calib: list [args, shape=(3,2), dtype=float]
+                The estimated positions in the altitude azimuth coordinate frame. Can be used to point
+                telescope to approximate position of stars.
+        """
+        
+        
+        self.lat_est = lat_est*unit[0]
+        self.lon_est = lon_est*unit[1]
+        
+        # Set observation time for calibration
+        self.time = time.Time.now()
+
+        # Set up approximate earth frame
+        loc_est = cp.EarthLocation(lon_est*unit[0],lat_est*unit[1])
+        earth_n = cp.AltAz(0*u.deg,90*u.deg,location=loc_est,obstime=self.time)
+        
+        # Coordinates of all visible stars
+        ra= self.naked["RA"].data
+        dec = self.naked["RA"].data
+        cat = cp.SkyCoord(ra = ra,dec = dec,unit=[u.hourangle,u.deg])
+
+        # Choose stars that are at least 30 degrees above horizon
+        select = earth_n.separation(cat) < cp.Angle(60*u.deg)
+
+        # Select the first three
+        c=0
+        inds=[]
+        for i in range(len(select)):
+            if select[i] == True:
+                c+=1
+                inds+=[i]
+                if c>=3:
+                    break
+
+        # choose the three ones from the catalog
+        cel_calib= self.naked.copy()
+        cel_calib.remove_rows(range(len(cel_calib)))
+        
+        for i in inds:
+            cel_calib.add_row(self.naked[i])
+            
+        # celestial coordinate points
+        cel_coors = [cel_calib["RA"],cel_calib["DEC"]]
+        
+        # coordinates in earth frame
+        p_coors = cp.SkyCoord(cel_coors[0],cel_coors[1],unit=[u.hourangle,u.deg])
+        altaz_calib = p_coors.transform_to(earth_n)
+        
+        # set class objects
+        self.altaz_calib = altaz_calib
+        self.cel_calib = cel_calib
+        
+        return altaz_calib
+
+    
+    def gen_mock_obs(self):
+        """
+        Generates fake observation data based on possible errors of +/- 5deg.
+        
+        Output:
+            ------
+            obs: list [args,len=2,dtype=float]
+                Difference in altitude and azimuth for three points, used in triangulation.
+        
+        """
+        
+        # creates class object based on random errors in telescope placement
+        self.mock_home = [self.lon_est + np.random.uniform(-5,5)*u.deg,
+                          self.lat_est + np.random.uniform(-5,5)*u.deg]
+        
+        # creates objects based on errors
+        mock_loc = cp.EarthLocation(self.mock_home[0],self.mock_home[1])
+        surf = cp.AltAz(location=mock_loc,obstime=self.time)
+        pts = self.altaz_calib.transform_to(surf)
+        
+        # calculate angular differences in altitude and azimuth for points
+        self.v2_v1 = [pts[1].az.rad - pts[0].az.rad, pts[1].alt.rad - pts[0].alt.rad]
+        self.v3_v2 = [pts[2].az.rad - pts[1].az.rad, pts[2].alt.rad - pts[1].alt.rad]
+        
+        return [self.v2_v1, self.v3_v2]
+    
+    def triangulate(self, v2_v1,v3_v2):
+        """
+        Used to triangulate the true latitude and longitude corresponding to the norm of the telescope position.
+        
+        Input
+            ------
+            v2_v1: list [args,len=2,dtype=float]
+                The difference in [azimuth,altitude] between object 2 and object 1
+               
+            v3_v2: list [args,len=2,dtype=float]
+                The difference in [azimuth,altitude] between object 3 and object 2
+        """
+        
+        ra = cp.Angle(self.cel_calib["RA"], unit=u.hourangle)
+        dec = cp.Angle(self.cel_calib["DEC"], unit=u.deg)
+
+        v = np.array([ra.rad,dec.rad]).T
+
+        out = self.triangulation_class.triangulate(v[0],v[1],v[2],v2_v1,v3_v2)
+
+        n = cp.SkyCoord(out[0][0],out[0][1],unit=u.rad,frame='icrs')
+
+        npr = cp.EarthLocation(lon=0*u.deg,lat=90*u.deg,height=0*u.m)
+
+        n.location=npr
+        n.obstime=self.time
+
+        [self.lon,self.lat] = [180-n.altaz.az.deg, n.altaz.alt.deg]
+        self.home = [self.lon,self.lat]
+        
+        h = cp.EarthLocation(self.home[0]*u.deg,self.home[1]*u.deg)
+        self.tel_frame = cp.AltAz(location=h,obstime=self.time)
+        v3 = cp.SkyCoord(v[2][0],v[2][1],unit=u.rad)
+        self.tel_pos = v3
+
+        
+        #return [self.on,self.lat]
+    
+    
+    
+    
+    
+    
 
 class Triangulate():
     """When coordinate systems are spun about an axis, they are first spun about the z-axis
@@ -14,7 +220,8 @@ class Triangulate():
 
     
     def xp(self,a,b):
-        """Returns x-prime, the vector representing the primed x-axis in the celestial frame. 
+        """
+        Returns x-prime, the vector representing the primed x-axis in the celestial frame. 
         Points toward the sky, normal to surface of earth.
         
         Input:
@@ -35,7 +242,8 @@ class Triangulate():
         return x_prime
 
     def yp(self,a,b):
-        """Returns y-prime, the vector representing the primed x-axis in the celestial frame. 
+        """
+        Returns y-prime, the vector representing the primed x-axis in the celestial frame. 
         Points toward the east, tangent to surface of earth.
         
         Input:
@@ -78,7 +286,8 @@ class Triangulate():
 
 
     def vec_prime(self, a, b, v, form='xyz'):
-        """Transforms a celestial-coordinate vector into a primed frame representation.
+        """
+        Transforms a celestial-coordinate vector into a primed frame representation.
         
         Inputs:
             ------
@@ -96,11 +305,9 @@ class Triangulate():
             rep: string, arg = 'xyz' or 'th-ph'
                 Specify whether the output data should be in xyz coordinates or theta-phi coordinates. 
                 
-        
         Output:
             v_prime: ndarray [arg, dtype=float, shape=(3) or shape=(2)]
                 The vector represented in the primed coordinate system.
-        
         """
         
         v = np.array(v)
@@ -122,6 +329,11 @@ class Triangulate():
         elif form == 'th-ph':
             th = np.arctan2(v_xyz[1],v_xyz[2])
             ph = np.arcsin(v_xyz[0])
+            
+            
+            if th < 0:
+                th+=2*np.pi
+            
             v_out = np.array([th,ph])
             
         else:
@@ -136,15 +348,13 @@ class Triangulate():
     
     
     def gen_mock(self,errs=[0,0]):
-        
-        """Generates a mock triangulation data set, to test the program.
+        """
+        Generates a mock triangulation data set, to test the program.
                 
         Optional:
             ------
             errs: list or ndarray [args, dtype=float shape=(2)] 
                 list the error in the the generated data of the observed angle differences
-                
-                
         
         Output:
             v_prime: ndarray [arg, dtype=float, shape=(3) or shape=(2)]
@@ -171,8 +381,8 @@ class Triangulate():
     
 
     def find_valid(self, obj1coor, obj2coor, obs, lims=[[0,2*np.pi],[-np.pi/2,np.pi/2]]):
-        """Calculates the probability distribution of lattitude and longitude points within the given limits.
-        
+        """
+        Calculates the probability distribution of lattitude and longitude points within the given limits.
         
         Inputs:
             ------
@@ -190,7 +400,6 @@ class Triangulate():
             lims: list or ndarray [args, dtype=float, shape=(2,2)]
                 The limits in which to look for valid longitude and lattitudes. Default is the entire space.
             
-        
         Output:
             ------
             grid: list [args,dtype=float,shape=(2,100,100)]
@@ -200,6 +409,9 @@ class Triangulate():
                 The normalized probability distribution over all points in the grid.
                 
         """
+        
+        #print obs*np.pi/180
+        
             
         n=self.comp_power
     
@@ -233,7 +445,9 @@ class Triangulate():
         #back from column to 2d grid
         thp= np.array(thp).reshape(n,n)
         php= np.array(php).reshape(n,n)
-
+        
+        #print thp
+        
         # Create surface that represents the True change in alt-az coords (as observed)
         obs12_th = np.ones((n,n))*obsth
         obs12_ph = np.ones((n,n))*obsph
@@ -267,15 +481,27 @@ class Triangulate():
         dist = (thdist/np.sum(thdist))*(phdist/np.sum(phdist))
         dist_norm = dist/np.sum(dist)
         
-        self.chain+=[dist]
+        self.chain+=[dist_norm]
         
         return grid,dist_norm
     
     def match(self,grid, c1,c2,c3):
-        """Combines three probability distributions to isolate points for which the lattitude and longitude values match observation"""
+        """
+        Combines three probability distributions to isolate points for which the lattitude and longitude 
+        values match observation
         
-        # We want to compare two functions whose data points are not necessarily the same. Thus, we have to bin both into
-        # a new, global data set.
+        Inputs
+            ------
+            c1: ndarray [args,shape=(n,n),dtype=float]
+                Normalized distribution as outputted by find_valid.
+        
+        Outputs:
+            stat_array: ndarray [args,shape=(2,2),dtype=float]
+                A list consisting in the expected values of the latitude and longitude and the errors.
+        """
+        
+        # We want to compare two functions whose data points are not necessarily the same. Thus, we have to 
+        # bin both into a new, global data set.
         
         comb = c1*c2*c3
         comb /= np.sum(comb)
@@ -303,8 +529,28 @@ class Triangulate():
 
     
     def triangulate(self, v1, v2, v3, obs_v1_v2, obs_v2_v3, iterations = 5, obserrs=[None,None]):
-        """given v1,v2,v3, three celestial coordinates for objects, and observed changes in altitude and azimuth of those
-        objects, returns exact coordinates of normal vector. i.e. latitude and longitude"""
+        """
+        Given v1,v2,v3, equatorial celestial coordinates for three objects, and observed changes in altitude 
+        and azimuth of those objects from the ground, returns coordinates of normal vector. i.e. latitude
+        and longitude
+        
+        Input:
+            ------
+            v1: list [args,shape=(2),dtpe=float]
+                The celestial coordinates of the first triangulation object
+                
+            v2: list [args,shape=(2),dtpe=float]
+                The celestial coordinates of the second triangulation object
+                
+            v3: list [args,shape=(2),dtpe=float]
+                The celestial coordinates of the third triangulation object
+                
+            v2_v1: list [args,shape=(2),dtpe=float]
+                The difference in azimuth and altitude between object 2 and object 1
+                
+            v3_v2: list [args,shape=(2),dtpe=float]
+                The difference in azimuth and altitude between object 3 and object 2
+        """
         
         if sum(np.array(obserrs)==None) == 0:
             self.obserrs = obserrs
